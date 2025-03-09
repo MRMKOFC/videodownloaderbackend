@@ -1,75 +1,123 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
+import os
 import yt_dlp
 import instaloader
-import os
-import requests
+from facebook_scraper import get_posts  # For Facebook post details
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for frontend requests
 
-# Create a downloads folder if it doesn't exist
-DOWNLOAD_FOLDER = "downloads"
-os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-
-# Home Route
-@app.route('/')
-def home():
-    return "Flask Server is Running!"
-
-# YouTube Downloader
-@app.route('/download/youtube', methods=['POST'])
-def download_youtube():
-    url = request.json.get('url')
-    if not url:
-        return jsonify({"error": "URL is required"}), 400
-
-    ydl_opts = {'outtmpl': f'{DOWNLOAD_FOLDER}/%(title)s.%(ext)s'}
+# Function to download YouTube videos
+def download_youtube_video(url):
     try:
+        ydl_opts = {
+            'outtmpl': 'download/youtube/%(title)s.%(ext)s',
+            'format': 'best',  # Best quality
+        }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            return jsonify({"title": info['title'], "file": f"{info['title']}.{info['ext']}"})
+            print(f"Downloading YouTube video: {url}")
+            ydl.download([url])
+            print("Download complete!")
+            return True
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error downloading YouTube video: {e}")
+        return False
 
-# Instagram Downloader
-@app.route('/download/instagram', methods=['POST'])
-def download_instagram():
-    url = request.json.get('url')
-    if not url:
-        return jsonify({"error": "URL is required"}), 400
-
-    L = instaloader.Instaloader(download_pictures=True, download_videos=True)
+# Function to download Instagram posts (video only)
+def download_instagram_post(url):
     try:
-        post = instaloader.Post.from_shortcode(L.context, url.split("/")[-2])
-        L.download_post(post, target=DOWNLOAD_FOLDER)
-        return jsonify({"message": "Download successful"})
+        loader = instaloader.Instaloader(dirname_pattern="download/instagram")
+        shortcode = url.split("/")[-2]  # Extract shortcode from URL
+        post = instaloader.Post.from_shortcode(loader.context, shortcode)
+        print(f"Downloading Instagram post: {post.url}")
+        if post.is_video:
+            loader.download_post(post, target=post.owner_username)
+            print("Download complete!")
+            return True
+        else:
+            print("This post does not contain a video.")
+            return False
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error downloading Instagram post: {e}")
+        return False
 
-# Facebook Downloader (Using External API)
-@app.route('/download/facebook', methods=['POST'])
-def download_facebook():
-    url = request.json.get('url')
+# Function to download Facebook videos
+def download_facebook_video(url):
+    try:
+        ydl_opts = {
+            'outtmpl': 'download/facebook/%(title)s.%(ext)s',
+            'format': 'best',
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print(f"Downloading Facebook video: {url}")
+            ydl.download([url])
+            print("Download complete!")
+            return True
+    except Exception as e:
+        print(f"Error downloading Facebook video: {e}")
+        return False
+
+# Function to scrape Facebook post details
+def get_facebook_post_details(url):
+    try:
+        posts = list(get_posts(post_urls=[url], cookies="cookies.txt"))
+        if posts:
+            post = posts[0]
+            return {
+                "text": post.get('text', 'No text available'),
+                "likes": post.get('likes', 0),
+                "comments": post.get('comments', 0),
+                "shares": post.get('shares', 0),
+                "video_url": post.get('video', 'No video found'),
+            }
+        return {"error": "Could not fetch post details"}
+    except Exception as e:
+        return {"error": f"Facebook scraping failed: {e}"}
+
+# Function to download Twitter (X) videos
+def download_twitter_video(url):
+    try:
+        ydl_opts = {
+            'outtmpl': 'download/twitter/%(title)s.%(ext)s',
+            'format': 'best',
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            print(f"Downloading Twitter video: {url}")
+            ydl.download([url])
+            print("Download complete!")
+            return True
+    except Exception as e:
+        print(f"Error downloading Twitter video: {e}")
+        return False
+
+@app.route('/download', methods=['GET'])
+def download():
+    url = request.args.get('url')
     if not url:
         return jsonify({"error": "URL is required"}), 400
 
-    fb_api_url = f"https://fbdownloaderapi.com/api?url={url}"
-    response = requests.get(fb_api_url)
-    
-    if response.status_code == 200:
-        return jsonify(response.json())
+    if "youtube.com" in url or "youtu.be" in url:
+        success = download_youtube_video(url)
+    elif "instagram.com" in url:
+        success = download_instagram_post(url)
+    elif "facebook.com" in url:
+        success = download_facebook_video(url)
+        post_details = get_facebook_post_details(url)
+        return jsonify({"message": "Facebook video download started", "post_details": post_details}), 200
+    elif "twitter.com" in url or "x.com" in url:
+        success = download_twitter_video(url)
     else:
-        return jsonify({"error": "Failed to fetch video"}), 500
+        return jsonify({"error": "Unsupported platform"}), 400
 
-# Telegram & TeraBox (Workaround Needed)
-@app.route('/download/telegram', methods=['POST'])
-def download_telegram():
-    return jsonify({"message": "Telegram downloading requires a bot implementation."})
+    if success:
+        return jsonify({"message": "Download started"}), 200
+    else:
+        return jsonify({"error": "Download failed"}), 500
 
-@app.route('/download/terabox', methods=['POST'])
-def download_terabox():
-    return jsonify({"message": "TeraBox downloading requires API access."})
+if __name__ == "__main__":
+    # Create directories for downloads
+    os.makedirs("download/youtube", exist_ok=True)
+    os.makedirs("download/instagram", exist_ok=True)
+    os.makedirs("download/facebook", exist_ok=True)
+    os.makedirs("download/twitter", exist_ok=True)
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host="0.0.0.0", port=5000)

@@ -1,6 +1,5 @@
-flask
-flask-cors
+Flask
 yt-dlp
 instaloader
+facebook-scraper
 requests
-gunicorn
